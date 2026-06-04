@@ -126,7 +126,13 @@ func LoadFromBytes(entries []CgnatEntry) {
 	defer cgnatMutex.Unlock()
 
 	for _, e := range entries {
-		cgnatMap[e.InsideIP] = e
-		stats.IncCGNATEntries()
+
+		old, exists := cgnatMap[e.InsideIP]
+
+		// insert OR update detection
+		if !exists || old != e {
+			cgnatMap[e.InsideIP] = e
+			stats.IncCGNATEntries()
+		}
 	}
 }

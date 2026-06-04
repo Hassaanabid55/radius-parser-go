@@ -89,7 +89,13 @@ func LoadFromBytes(entries []WhitelistInfo) {
 	defer whitelistMutex.Unlock()
 
 	for _, e := range entries {
-		whitelistMap[e.MSISDN] = e
-		stats.IncWhitelistEntries()
+
+		old, exists := whitelistMap[e.MSISDN]
+
+		// insert OR update detection
+		if !exists || old != e {
+			whitelistMap[e.MSISDN] = e
+			stats.IncWhitelistEntries()
+		}
 	}
 }
