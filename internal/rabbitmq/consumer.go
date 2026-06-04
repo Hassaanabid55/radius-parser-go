@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"encoding/json"
+	"log"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -36,8 +37,8 @@ func startStatsConsumer() error {
 		false,
 		false,
 		amqp.Table{
-        "x-queue-type": "quorum",
-    },
+			"x-queue-type": "quorum",
+		},
 	)
 	if err != nil {
 		return err
@@ -96,8 +97,8 @@ func startCGNATConsumer() error {
 		false,
 		false,
 		amqp.Table{
-        "x-queue-type": "quorum",
-    },
+			"x-queue-type": "quorum",
+		},
 	)
 	if err != nil {
 		return err
@@ -128,14 +129,23 @@ func startCGNATConsumer() error {
 	}
 
 	go func() {
-
 		for d := range msgs {
+			// try array first
+			var list []cgnat.CgnatEntry
 
-			var entries []cgnat.CgnatEntry
-
-			if json.Unmarshal(d.Body, &entries) == nil {
-				cgnat.LoadFromBytes(entries)
+			if err := json.Unmarshal(d.Body, &list); err == nil {
+				cgnat.LoadFromBytes(list)
+				continue
 			}
+
+			// fallback: single object
+			var single cgnat.CgnatEntry
+			if err := json.Unmarshal(d.Body, &single); err == nil {
+				cgnat.LoadFromBytes([]cgnat.CgnatEntry{single})
+				continue
+			}
+
+			log.Printf("Failed to parse CGNAT entries")
 		}
 	}()
 
@@ -151,8 +161,8 @@ func startWhitelistConsumer() error {
 		false,
 		false,
 		amqp.Table{
-        "x-queue-type": "quorum",
-    },
+			"x-queue-type": "quorum",
+		},
 	)
 	if err != nil {
 		return err
@@ -185,12 +195,21 @@ func startWhitelistConsumer() error {
 	go func() {
 
 		for d := range msgs {
+			var list []whitelist.WhitelistInfo
 
-			var entries []whitelist.WhitelistInfo
-
-			if json.Unmarshal(d.Body, &entries) == nil {
-				whitelist.LoadFromBytes(entries)
+			if err := json.Unmarshal(d.Body, &list); err == nil {
+				whitelist.LoadFromBytes(list)
+				continue
 			}
+
+			// fallback: single object
+			var single whitelist.WhitelistInfo
+			if err := json.Unmarshal(d.Body, &single); err == nil {
+				whitelist.LoadFromBytes([]whitelist.WhitelistInfo{single})
+				continue
+			}
+			log.Printf("Failed to parse whitelist entries")
+			// try array first
 		}
 	}()
 
