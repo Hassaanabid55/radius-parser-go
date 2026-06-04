@@ -1,405 +1,211 @@
 package main
 
 import (
-	"bufio"
 	"flag"
-	"log/syslog"
+	"fmt"
+	"log"
 	"os"
-	"os/signal"
-	"strconv"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"syscall"
+
+	"radius-parser/internal/capture"
+	"radius-parser/internal/cgnat"
+	"radius-parser/internal/config"
+	"radius-parser/internal/parser"
+	"radius-parser/internal/whitelist"
+	"radius-parser/internal/workers"
 )
 
-// =========================
-// CONFIGURATION OPTIONS
-// =========================
+func printConfig(cfg *config.Config) {
+	fmt.Println("\n================ CONFIG DUMP ================")
 
-type Config struct {
-	ConfigFile      string
-	CGNATFilePath   string
-	WhitelistFile   string
-	InterfaceName   string
-	InputFiles      string
-	ThreadsStr      string
-	Verbosity       uint8
-	Caplen          uint16
-	ByeTimeout      uint16
-	RabbitMQPort    uint16
-	UpdateTimeout   uint32
-	RingBufferSize  uint32
-	ExtractAll      bool
+	fmt.Println("GENERAL")
+	fmt.Println("  CGNATFilePath    :", cfg.CGNATFilePath)
+	fmt.Println("  WhitelistFilePath:", cfg.WhitelistFilePath)
+	fmt.Println("  InterfaceName    :", cfg.InterfaceName)
+	fmt.Println("  Threads          :", cfg.Threads)
+	fmt.Println("  ExtractAll       :", cfg.ExtractAll)
+	fmt.Println("  Verbosity        :", cfg.Verbosity)
+	fmt.Println("  CapLen           :", cfg.CapLen)
+	fmt.Println("  UpdateTimeout    :", cfg.UpdateTimeout)
+	fmt.Println("  RingBufferSize   :", cfg.RingBufferSize)
 
-	// RabbitMQ
-	RabbitMQHost     string
-	RabbitMQVHost    string
-	RabbitMQUser     string
-	RabbitMQPassword string
-	RabbitMQExchange string
+	fmt.Println("\nINPUT")
+	fmt.Println("  InputFile        :", cfg.InputFile)
+
+	fmt.Println("\nMYSQL")
+	fmt.Println("  Host             :", cfg.MySQLHost)
+	fmt.Println("  Database         :", cfg.MySQLDatabase)
+	fmt.Println("  User             :", cfg.MySQLUser)
+	fmt.Println("  Password         :", cfg.MySQLPassword)
+	fmt.Println("  Port             :", cfg.MySQLPort)
+
+	fmt.Println("\nRABBITMQ")
+	fmt.Println("  Host             :", cfg.RabbitMQHost)
+	fmt.Println("  Port             :", cfg.RabbitMQPort)
+	fmt.Println("  User             :", cfg.RabbitMQUser)
+	fmt.Println("  Password         :", cfg.RabbitMQPassword)
+	fmt.Println("  VHost            :", cfg.RabbitMQVHost)
+	fmt.Println("  Exchange         :", cfg.RabbitMQExchange)
+
 }
 
-// =========================
-// GLOBALS
-// =========================
-
-var (
-	gRunning int32 = 1 // atomic
-	log      *syslog.Writer
-)
-
-// =========================
-// PARSERS
-// =========================
-
-func parseU8(s string) uint8 {
-	v, _ := strconv.ParseUint(strings.TrimSpace(s), 10, 8)
-	return uint8(v)
+func atoi(s string) int {
+	var v int
+	fmt.Sscanf(s, "%d", &v)
+	return v
 }
 
-func parseU16(s string) uint16 {
-	v, _ := strconv.ParseUint(strings.TrimSpace(s), 10, 16)
-	return uint16(v)
-}
+func overrideCLI(cfg *config.Config) {
 
-func parseU32(s string) uint32 {
-	v, _ := strconv.ParseUint(strings.TrimSpace(s), 10, 32)
-	return uint32(v)
-}
+	args := os.Args[1:]
 
-func parseBool(s string) bool {
-	s = strings.TrimSpace(strings.ToLower(s))
-	return s == "1" || s == "true" || s == "yes" || s == "on"
-}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 
-// =========================
-// CONFIG LOADER
-// =========================
+		switch arg {
 
-func loadConfig(path string, cfg *Config) error {
-	f, err := os.Open(path)
-	if err != nil {
-		log.Err("Failed opening config: " + path)
-		return err
-	}
-	defer f.Close()
+		case "-v", "--verbose":
+			if i+1 < len(args) {
+				cfg.Verbosity = atoi(args[i+1])
+				i++
+			}
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		idx := strings.IndexByte(line, '=')
-		if idx < 0 {
-			continue
-		}
-		key := strings.TrimSpace(line[:idx])
-		val := strings.TrimSpace(line[idx+1:])
-		if key == "" || val == "" {
-			continue
-		}
+		case "-i", "--interface":
+			if i+1 < len(args) {
+				cfg.InterfaceName = args[i+1]
+				i++
+			}
 
-		switch key {
-		// General
-		case "verbosity":
-			cfg.Verbosity = parseU8(val)
-		case "cgnat_file_path":
-			cfg.CGNATFilePath = val
-		case "whitelist_file_path":
-			cfg.WhitelistFile = val
-		case "interface_name":
-			cfg.InterfaceName = val
-		case "threads":
-			cfg.ThreadsStr = val
-		case "extract_all":
-			cfg.ExtractAll = parseBool(val)
+		case "-t", "--threads":
+			if i+1 < len(args) {
+				cfg.Threads = config.ParseThreads(args[i+1])
+				i++
+			}
 
-		// Capture
-		case "caplen":
-			cfg.Caplen = parseU16(val)
-		case "update_timeout":
-			cfg.UpdateTimeout = parseU32(val)
-		case "bye_timeout":
-			cfg.ByeTimeout = parseU16(val)
-		case "ring_buffer_size":
-			cfg.RingBufferSize = parseU32(val)
+		case "--input-file":
+			if i+1 < len(args) {
+				cfg.InputFile = args[i+1]
+				i++
+			}
 
-		// Input
-		case "input_file":
-			cfg.InputFiles = val
+		case "--caplen":
+			if i+1 < len(args) {
+				cfg.CapLen = atoi(args[i+1])
+				i++
+			}
 
-		// RabbitMQ
-		case "rabbitmq_host":
-			cfg.RabbitMQHost = val
-		case "rabbitmq_vhost":
-			cfg.RabbitMQVHost = val
-		case "rabbitmq_user":
-			cfg.RabbitMQUser = val
-		case "rabbitmq_password":
-			cfg.RabbitMQPassword = val
-		case "rabbitmq_exchange":
-			cfg.RabbitMQExchange = val
-		case "rabbitmq_port":
-			cfg.RabbitMQPort = parseU16(val)
+		case "--update-timeout":
+			if i+1 < len(args) {
+				cfg.UpdateTimeout = atoi(args[i+1])
+				i++
+			}
+
+		case "--ring-buffer-size":
+			if i+1 < len(args) {
+				cfg.RingBufferSize = atoi(args[i+1])
+				i++
+			}
 		}
 	}
-
-	return scanner.Err()
 }
 
-// =========================
-// SIGNAL HANDLER / CLEANUP
-// =========================
-
-// App holds runtime state shared across goroutines.
-type App struct {
-	cfg     *Config
-	queue   *GlobalQueue
-	pcap    PcapHandle // interface defined in capture.go
-	once    sync.Once
+type Runtime struct {
+	Config *config.Config
 }
-
-func (app *App) cleanup() {
-	app.once.Do(func() {
-		app.queue.Shutdown()
-		if app.pcap != nil && app.cfg.InputFiles == "" {
-			app.pcap.BreakLoop()
-		}
-		atomic.StoreInt32(&gRunning, 0)
-	})
-}
-
-func (app *App) handleSignals() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-ch
-		if app.cfg.Verbosity > 0 {
-			log.Info("Shutdown signal received: " + sig.String())
-		}
-		app.cleanup()
-	}()
-}
-
-// =========================
-// MAIN
-// =========================
 
 func main() {
-	var err error
-	log, err = syslog.New(syslog.LOG_USER|syslog.LOG_PID, "radius_parser")
+
+	// =========================
+	// STEP 1: FIRST PASS CLI (ONLY config path)
+	// =========================
+	configPath := flag.String("c", "", "config file path")
+	flag.Parse()
+
+	if *configPath == "" {
+		log.Fatal("config file path is required (-c)")
+	}
+
+	// =========================
+	// STEP 2: LOAD CONFIG FILE
+	// =========================
+	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
-		panic("syslog: " + err.Error())
-	}
-	defer log.Close()
-
-	cfg := &Config{
-		InterfaceName:  "lo",
-		Caplen:         3200,
-		ByeTimeout:     43200,
-		UpdateTimeout:  900,
-		RingBufferSize: 1048576,
+		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// -------------------------
-	// Parse flags
-	// -------------------------
-	fs := flag.NewFlagSet("radius_parser", flag.ExitOnError)
+	// =========================
+	// STEP 3: SECOND PASS CLI OVERRIDES
+	// (rebuild flag set manually for full control like C)
+	// =========================
+	overrideCLI(cfg)
 
-	fs.StringVar(&cfg.ConfigFile, "c", "", "Config file path")
-	fs.StringVar(&cfg.ConfigFile, "config-file", "", "Config file path")
-
-	verbosity := fs.Uint("v", 0, "Verbosity level")
-	fs.Uint("verbose", 0, "Verbosity level")
-
-	fs.StringVar(&cfg.InterfaceName, "i", cfg.InterfaceName, "Network interface")
-	fs.StringVar(&cfg.InterfaceName, "interface", cfg.InterfaceName, "Network interface")
-
-	fs.StringVar(&cfg.ThreadsStr, "t", "", "Thread list")
-	fs.StringVar(&cfg.ThreadsStr, "threads", "", "Thread list")
-
-	fs.StringVar(&cfg.InputFiles, "input-file", "", "Input PCAP file")
-
-	fs.StringVar(&cfg.WhitelistFile, "whitelist-file", "", "Whitelist file")
-	fs.StringVar(&cfg.CGNATFilePath, "cgnat-file", "", "CGNAT CSV file")
-
-	extractAll := fs.Bool("extract-all", false, "Extract all flows")
-
-	caplen := fs.Uint("caplen", uint(cfg.Caplen), "Capture length")
-	updateTimeout := fs.Uint("update-timeout", uint(cfg.UpdateTimeout), "Update timeout (s)")
-	byeTimeout := fs.Uint("bye-timeout", uint(cfg.ByeTimeout), "Bye timeout (s)")
-	ringBuf := fs.Uint("ring-buffer-size", uint(cfg.RingBufferSize), "Ring buffer size")
-
-	// RabbitMQ
-	fs.StringVar(&cfg.RabbitMQHost, "rabbitmq-host", "", "RabbitMQ host")
-	fs.StringVar(&cfg.RabbitMQVHost, "rabbitmq-vhost", "", "RabbitMQ vhost")
-	fs.StringVar(&cfg.RabbitMQUser, "rabbitmq-user", "", "RabbitMQ user")
-	fs.StringVar(&cfg.RabbitMQPassword, "rabbitmq-password", "", "RabbitMQ password")
-	fs.StringVar(&cfg.RabbitMQExchange, "rabbitmq-exchange", "", "RabbitMQ exchange")
-	rabbitmqPort := fs.Uint("rabbitmq-port", 0, "RabbitMQ port")
-
-	_ = fs.Parse(os.Args[1:])
-
-	// Apply numeric flags back into cfg
-	cfg.Verbosity = uint8(*verbosity)
-	cfg.ExtractAll = *extractAll
-	cfg.Caplen = uint16(*caplen)
-	cfg.UpdateTimeout = uint32(*updateTimeout)
-	cfg.ByeTimeout = uint16(*byeTimeout)
-	cfg.RingBufferSize = uint32(*ringBuf)
-	cfg.RabbitMQPort = uint16(*rabbitmqPort)
-
-	// -------------------------
-	// Load config file first, then CLI overrides take precedence
-	// (flag.Parse already applied CLI values; re-parse config below
-	//  only fills keys that were not explicitly set on CLI)
-	// -------------------------
-	if cfg.ConfigFile != "" {
-		fileCfg := *cfg // snapshot CLI values
-		if err := loadConfig(cfg.ConfigFile, cfg); err != nil {
-			os.Exit(1)
-		}
-		// Restore CLI overrides (non-zero / non-empty CLI values win)
-		mergeConfig(cfg, &fileCfg)
-	}
-
+	// =========================
+	// DEBUG OUTPUT (optional)
+	// =========================
 	if cfg.Verbosity > 0 {
-		log.Info("Radius parser started")
+		fmt.Println("=== CONFIG LOADED ===")
+		fmt.Printf("Interface: %s\n", cfg.InterfaceName)
+		fmt.Printf("Threads: %v\n", cfg.Threads)
+		fmt.Printf("Verbosity: %d\n", cfg.Verbosity)
+		fmt.Printf("InputFile: %s\n", cfg.InputFile)
 	}
 
-	// -------------------------
-	// Build app
-	// -------------------------
-	queue := NewGlobalQueue()
-	app := &App{cfg: cfg, queue: queue}
-	app.handleSignals()
+	// =========================
+	// RUNTIME OBJECT
+	// =========================
+	rt := &Runtime{Config: cfg}
 
-	// -------------------------
-	// RabbitMQ init
-	// -------------------------
-	rmqCfg := RabbitMQConfig{
-		Host:     cfg.RabbitMQHost,
-		VHost:    cfg.RabbitMQVHost,
-		User:     cfg.RabbitMQUser,
-		Password: cfg.RabbitMQPassword,
-		Exchange: cfg.RabbitMQExchange,
-		Port:     cfg.RabbitMQPort,
-	}
-	RabbitMQInit(&rmqCfg)
-
-	// -------------------------
-	// Bootstrap state
-	// -------------------------
-	RabbitMQBootstrapState()
-
-		if cfg.Verbosity > 0 {
-			log.Info("Loading data from files")
-		}
-		if cfg.WhitelistFile == "" || cfg.CGNATFilePath == "" {
-			log.Err("Whitelist/CGNAT file missing")
-			os.Exit(1)
-		}
-		if err := WLLoadFromFile(cfg.WhitelistFile); err != nil {
-			log.Err("Failed loading whitelist file")
-			os.Exit(1)
-		}
-		if err := CGNATLoadFromCSV(cfg.CGNATFilePath); err != nil {
-			log.Err("Failed loading CGNAT CSV")
-			os.Exit(1)
-		}
-	
-
-	// -------------------------
-	// Start workers
-	// -------------------------
-	var wg sync.WaitGroup
-	StartWorkerThreads(&wg, queue, cfg)
-
-	// -------------------------
-	// Start capture
-	// -------------------------
-	if cfg.InputFiles != "" {
-		if cfg.Verbosity > 0 {
-			log.Info("Processing input file: " + cfg.InputFiles)
-		}
-		StartFileCapture(cfg.InputFiles, queue, cfg)
-		app.cleanup()
-	} else {
-		handle := StartInterfaceCapture(queue, cfg)
-		app.pcap = handle
-	}
-
-	// -------------------------
-	// Wait for shutdown
-	// -------------------------
-	for atomic.LoadInt32(&gRunning) == 1 {
-		syscall.Nanosleep(&syscall.Timespec{Sec: 1}, nil)
-	}
-
-	if cfg.Verbosity > 0 {
-		log.Info("Waiting for worker threads...")
-	}
-
-	wg.Wait()
-
-	log.Info("All threads exited, performing cleanup")
-
-	DBClose()
-	RabbitMQCleanup()
-	queue.Close()
+	printConfig(cfg)
+	start(rt)
 }
 
-// mergeConfig copies non-zero CLI values back over config-file values so CLI wins.
-func mergeConfig(base, cli *Config) {
-	if cli.Verbosity != 0 {
-		base.Verbosity = cli.Verbosity
-	}
-	if cli.CGNATFilePath != "" {
-		base.CGNATFilePath = cli.CGNATFilePath
-	}
-	if cli.WhitelistFile != "" {
-		base.WhitelistFile = cli.WhitelistFile
-	}
-	if cli.InterfaceName != "" && cli.InterfaceName != "lo" {
-		base.InterfaceName = cli.InterfaceName
-	}
-	if cli.InputFiles != "" {
-		base.InputFiles = cli.InputFiles
-	}
-	if cli.ThreadsStr != "" {
-		base.ThreadsStr = cli.ThreadsStr
-	}
-	if cli.ExtractAll {
-		base.ExtractAll = true
-	}
-	if cli.Caplen != 0 && cli.Caplen != 3200 {
-		base.Caplen = cli.Caplen
-	}
-	if cli.UpdateTimeout != 0 && cli.UpdateTimeout != 900 {
-		base.UpdateTimeout = cli.UpdateTimeout
-	}
-	if cli.ByeTimeout != 0 && cli.ByeTimeout != 43200 {
-		base.ByeTimeout = cli.ByeTimeout
-	}
-	if cli.RingBufferSize != 0 && cli.RingBufferSize != 1048576 {
-		base.RingBufferSize = cli.RingBufferSize
+func start(rt *Runtime) {
+
+	cfg := rt.Config
+
+	// =========================
+	// 1. INIT CAPTURE FIRST (QUEUE OWNER)
+	// =========================
+	capture.InitCapture(
+		cfg.RingBufferSize,
+		cfg.CapLen,
+		cfg.Verbosity,
+	)
+
+	parser.InitParser(
+		cfg.ExtractAll,    // extract all
+		cfg.UpdateTimeout, // timeout
+		cfg.Verbosity,     // verbosity
+	)
+
+	// =========================
+	// 2. START WORKERS (CONSUMERS)
+	// =========================
+	workers.StartWorkers(workers.WorkerConfig{
+		CoreIDs: cfg.Threads,
+		Verbose: cfg.Verbosity,
+	})
+
+	// =========================
+	// LOAD DATA (BEFORE WORKERS)
+	// =========================
+	if cfg.CGNATFilePath != "" {
+		if err := cgnat.LoadCGNATFromCSV(cfg.CGNATFilePath); err != nil {
+			log.Fatalf("CGNAT load failed: %v", err)
+		}
 	}
 
-	if cli.RabbitMQHost != "" {
-		base.RabbitMQHost = cli.RabbitMQHost
+	if cfg.WhitelistFilePath != "" {
+		if err := whitelist.LoadWhitelistFromFile(cfg.WhitelistFilePath); err != nil {
+			log.Fatalf("Whitelist load failed: %v", err)
+		}
 	}
-	if cli.RabbitMQVHost != "" {
-		base.RabbitMQVHost = cli.RabbitMQVHost
-	}
-	if cli.RabbitMQUser != "" {
-		base.RabbitMQUser = cli.RabbitMQUser
-	}
-	if cli.RabbitMQPassword != "" {
-		base.RabbitMQPassword = cli.RabbitMQPassword
-	}
-	if cli.RabbitMQExchange != "" {
-		base.RabbitMQExchange = cli.RabbitMQExchange
-	}
-	if cli.RabbitMQPort != 0 {
-		base.RabbitMQPort = cli.RabbitMQPort
+
+	// =========================
+	// 3. START CAPTURE (PRODUCER)
+	// =========================
+	if cfg.InputFile != "" {
+		capture.StartFileCapture(cfg.InputFile)
+	} else {
+		capture.StartInterfaceCapture(cfg.InterfaceName)
 	}
 }
