@@ -14,8 +14,6 @@ type ExtraAVP struct {
 }
 
 type UserSession struct {
-	ValidAttributes uint64
-
 	EventTimestamp uint32
 	PacketCount    uint32
 	DestroyTime    uint32
@@ -117,5 +115,16 @@ func AddExtraAVP(
 	)
 }
 
-func PublishStart(*UserSession) {}
-func PublishSync(*UserSession)  {}
+func UpdatePacketCount(sessionID string, delta uint32) {
+	Mu.RLock()
+	node := Map[sessionID]
+	Mu.RUnlock()
+
+	if node == nil {
+		return
+	}
+
+	Mu.Lock()
+	node.Entry.PacketCount += delta
+	Mu.Unlock()
+}

@@ -10,6 +10,7 @@ import (
 	"radius-parser/internal/cgnat"
 	"radius-parser/internal/config"
 	"radius-parser/internal/parser"
+	"radius-parser/internal/rabbitmq"
 	"radius-parser/internal/whitelist"
 	"radius-parser/internal/workers"
 )
@@ -30,13 +31,6 @@ func printConfig(cfg *config.Config) {
 
 	fmt.Println("\nINPUT")
 	fmt.Println("  InputFile        :", cfg.InputFile)
-
-	fmt.Println("\nMYSQL")
-	fmt.Println("  Host             :", cfg.MySQLHost)
-	fmt.Println("  Database         :", cfg.MySQLDatabase)
-	fmt.Println("  User             :", cfg.MySQLUser)
-	fmt.Println("  Password         :", cfg.MySQLPassword)
-	fmt.Println("  Port             :", cfg.MySQLPort)
 
 	fmt.Println("\nRABBITMQ")
 	fmt.Println("  Host             :", cfg.RabbitMQHost)
@@ -163,30 +157,35 @@ func start(rt *Runtime) {
 	cfg := rt.Config
 
 	// =========================
-	// 1. INIT CAPTURE FIRST (QUEUE OWNER)
+	// 1. INIT CAPTURE
 	// =========================
-	capture.InitCapture(
-		cfg.RingBufferSize,
-		cfg.CapLen,
-		cfg.Verbosity,
+	capture.InitCapture(cfg.RingBufferSize, cfg.CapLen, cfg.Verbosity)
+
+	parser.InitParser(cfg.ExtractAll, cfg.UpdateTimeout, cfg.Verbosity)
+
+	// =========================
+	// 2. INIT RABBITMQ
+	// =========================
+	err := rabbitmq.Init(
+		rabbitmq.Config{
+			Host:     cfg.RabbitMQHost,
+			Port:     cfg.RabbitMQPort,
+			User:     cfg.RabbitMQUser,
+			Password: cfg.RabbitMQPassword,
+			Vhost:    cfg.RabbitMQVHost,
+			Exchange: cfg.RabbitMQExchange,
+		},
 	)
+	if err != nil {
+		log.Fatalf("rabbitmq init failed: %v", err)
+	}
 
-	parser.InitParser(
-		cfg.ExtractAll,    // extract all
-		cfg.UpdateTimeout, // timeout
-		cfg.Verbosity,     // verbosity
-	)
-
-	// =========================
-	// 2. START WORKERS (CONSUMERS)
-	// =========================
-	workers.StartWorkers(workers.WorkerConfig{
-		CoreIDs: cfg.Threads,
-		Verbose: cfg.Verbosity,
-	})
+	if err := rabbitmq.StartConsumers(); err != nil {
+		log.Fatalf("rabbitmq consumers failed: %v", err)
+	}
 
 	// =========================
-	// LOAD DATA (BEFORE WORKERS)
+	// 3. LOAD LOCAL FALLBACK DATA
 	// =========================
 	if cfg.CGNATFilePath != "" {
 		if err := cgnat.LoadCGNATFromCSV(cfg.CGNATFilePath); err != nil {
@@ -201,7 +200,15 @@ func start(rt *Runtime) {
 	}
 
 	// =========================
-	// 3. START CAPTURE (PRODUCER)
+	// 4. START WORKERS
+	// =========================
+	workers.StartWorkers(workers.WorkerConfig{
+		CoreIDs: cfg.Threads,
+		Verbose: cfg.Verbosity,
+	})
+
+	// =========================
+	// 5. START CAPTURE
 	// =========================
 	if cfg.InputFile != "" {
 		capture.StartFileCapture(cfg.InputFile)

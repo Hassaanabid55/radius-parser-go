@@ -5,9 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
-
-	"radius-parser/internal/session"
 )
 
 /* =========================================================
@@ -103,17 +100,7 @@ func sessionPrintStats() {
 	log.Printf("Total Deletes            : %d", atomic.LoadUint64(&gSessionTotalDeletes))
 	log.Printf("Total Restores           : %d", atomic.LoadUint64(&gSessionTotalRestores))
 
-	count := atomic.LoadUint64(&gSessionCount)
-	if count > 0 {
-		approxMem := count * uint64(unsafeSizeOfSessionNode())
-		log.Printf("Approx memory            : %d KB", approxMem/1024)
-	}
-
 	log.Println("===================================================")
-}
-
-func unsafeSizeOfSessionNode() uintptr {
-	return unsafe.Sizeof(session.SessionNode{})
 }
 
 var statsStopCh = make(chan struct{})

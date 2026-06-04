@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"radius-parser/internal/rabbitmq"
 	"radius-parser/internal/session"
 	"radius-parser/internal/stats"
 )
@@ -68,11 +69,13 @@ func sessionTimeoutLoop() {
 				// IMPORTANT: delete safely under lock
 				delete(session.Map, id)
 
+				rabbitmq.PublishSessionStop(node.Entry)
+
 				// update stats (if you want C parity)
 				if stats.GetSessionCount() > 0 {
 					stats.DecSessionCount()
 				}
-				stats.IncTotalDeletes()
+				stats.IncDeletes()
 			}
 
 			shard = (shard + 1) % 10

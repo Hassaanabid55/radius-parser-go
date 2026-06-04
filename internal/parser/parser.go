@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"radius-parser/internal/cgnat"
+	"radius-parser/internal/rabbitmq"
 	"radius-parser/internal/session"
 	"radius-parser/internal/stats"
 	"radius-parser/internal/whitelist"
@@ -165,6 +166,18 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 			if len(value) == 4 {
 				v := binary.BigEndian.Uint32(value)
 				s.AccountStatusType = uint8(v)
+
+				switch s.AccountStatusType {
+
+				case SessionStart:
+					stats.IncStarts()
+
+				case SessionUpdate:
+					stats.IncTotalUpdates()
+
+				case SessionStop:
+					stats.IncTotalDeletes()
+				}
 			}
 
 		case AcctSessionID:
@@ -224,7 +237,7 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 			*s = node.Entry
 			session.Unlock()
 
-			stats.IncTotalUpdates()
+			stats.IncUpdates()
 			return s, nil
 
 		case SessionStop:
@@ -234,8 +247,10 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 			session.DeleteNode(node)
 			session.Unlock()
 
+			rabbitmq.PublishSessionStop(s)
+
 			stats.DecSessionCount()
-			stats.IncTotalDeletes()
+			stats.IncDeletes()
 			return s, nil
 		}
 	}
@@ -251,10 +266,7 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 
 		rc := session.Insert(s)
 
-		if s.AccountStatusType == SessionUpdate {
-			// session.PublishStart(s)
-			// session.PublishSync(s)
-		}
+		rabbitmq.PublishSessionStart(s)
 
 		if rc == 0 {
 			stats.IncSessionCount()

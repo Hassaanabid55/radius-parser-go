@@ -82,3 +82,14 @@ func Lookup(msisdn string) (WhitelistInfo, bool) {
 	v, ok := whitelistMap[msisdn]
 	return v, ok
 }
+
+func LoadFromBytes(entries []WhitelistInfo) {
+
+	whitelistMutex.Lock()
+	defer whitelistMutex.Unlock()
+
+	for _, e := range entries {
+		whitelistMap[e.MSISDN] = e
+		stats.IncWhitelistEntries()
+	}
+}

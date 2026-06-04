@@ -22,13 +22,6 @@ type Config struct {
 
 	InputFile string
 
-	// MySQL
-	MySQLHost     string
-	MySQLDatabase string
-	MySQLUser     string
-	MySQLPassword string
-	MySQLPort     int
-
 	// RabbitMQ
 	RabbitMQHost     string
 	RabbitMQPort     int
@@ -125,18 +118,6 @@ func (c *Config) apply(key, val string) {
 	// input
 	case "input_file":
 		c.InputFile = val
-
-	// mysql
-	case "mysql_host":
-		c.MySQLHost = val
-	case "mysql_database":
-		c.MySQLDatabase = val
-	case "mysql_user":
-		c.MySQLUser = val
-	case "mysql_password":
-		c.MySQLPassword = val
-	case "mysql_port":
-		c.MySQLPort = parseInt(val)
 
 	// rabbitmq
 	case "rabbitmq_host":

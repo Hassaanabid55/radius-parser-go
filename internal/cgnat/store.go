@@ -119,3 +119,14 @@ func (c CgnatEntry) NatIPBytes() [4]byte {
 	fmt.Sscanf(c.NatIP, "%d.%d.%d.%d", &out[0], &out[1], &out[2], &out[3])
 	return out
 }
+
+func LoadFromBytes(entries []CgnatEntry) {
+
+	cgnatMutex.Lock()
+	defer cgnatMutex.Unlock()
+
+	for _, e := range entries {
+		cgnatMap[e.InsideIP] = e
+		stats.IncCGNATEntries()
+	}
+}
