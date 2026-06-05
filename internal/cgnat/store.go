@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -38,7 +37,6 @@ func LoadCGNATFromCSV(path string) error {
 	scanner := bufio.NewScanner(f)
 
 	if scanner.Scan() {
-		// skip header
 	}
 
 	for scanner.Scan() {
@@ -94,30 +92,6 @@ func Lookup(ip string) (CgnatEntry, bool) {
 
 	v, ok := cgnatMap[ip]
 	return v, ok
-}
-
-func (c CgnatEntry) PublicIPv4Bytes() [4]byte {
-
-	var out [4]byte
-
-	ip := net.ParseIP(c.NatIP)
-	if ip == nil {
-		return out
-	}
-
-	ipv4 := ip.To4()
-	if ipv4 == nil {
-		return out
-	}
-
-	copy(out[:], ipv4)
-	return out
-}
-
-func (c CgnatEntry) NatIPBytes() [4]byte {
-	var out [4]byte
-	fmt.Sscanf(c.NatIP, "%d.%d.%d.%d", &out[0], &out[1], &out[2], &out[3])
-	return out
 }
 
 func LoadFromBytes(entries []CgnatEntry) {

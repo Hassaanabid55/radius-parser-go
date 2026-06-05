@@ -7,10 +7,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-func publish(
-	routingKey string,
-	v any,
-) error {
+func publish(routingKey string, v any) error {
 
 	if GlobalClient == nil {
 		return fmt.Errorf("rabbitmq not initialized")

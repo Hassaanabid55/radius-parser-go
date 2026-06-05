@@ -67,7 +67,6 @@ func processPacket(packet gopacket.Packet) {
 	ip := ipLayer.(*layers.IPv4)
 	udp := udpLayer.(*layers.UDP)
 
-	// RADIUS ports (like your C logic)
 	if !isRadiusPort(uint16(udp.SrcPort), uint16(udp.DstPort)) {
 		return
 	}
@@ -84,12 +83,11 @@ func processPacket(packet gopacket.Packet) {
 		IsRadius: true,
 	}
 
-	// push to queue (non-blocking safety optional)
 	select {
 	case TaskQueue <- task:
 		Inflight.Add(1)
 	default:
-		// drop if full (same behavior as C queue full)
+		log.Println("Task queue full, dropping packet")
 	}
 }
 

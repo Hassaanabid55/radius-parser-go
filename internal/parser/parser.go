@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"sync/atomic"
 	"time"
 
@@ -198,22 +199,16 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 
 		case FramedIPAddress:
 			if len(value) == 4 {
-
-				copy(s.FramedIPv4[:], value)
-
-				ipStr := parseIPv4(s.FramedIPv4[:])
-
-				if nat, ok := cgnat.Lookup(ipStr); ok {
-
-					s.PublicIPv4 = nat.NatIPBytes()
-
+				s.FramedIPv4 = parseIPv4(value)
+				if nat, ok := cgnat.Lookup(s.FramedIPv4); ok {
+					s.PublicIPv4 = nat.NatIP
 					s.PortStart = nat.StartPort
 					s.PortEnd = nat.EndPort
 				}
 			}
 
 		case FramedIPv6Prefix:
-			copy(s.FramedIPv6[:], value)
+			s.FramedIPv6 = parseIPv6Prefix(value)
 
 		case AcctMultiSessionID:
 			s.MultiSessionID = string(value)
@@ -278,5 +273,28 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 }
 
 func parseIPv4(b []byte) string {
-	return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
+    if len(b) != 4 {
+        return ""
+    }
+
+    return net.IP(b).String()
+}
+
+func parseIPv6Prefix(b []byte) string {
+
+    if len(b) < 2 {
+        return ""
+    }
+
+    prefixLen := b[1]
+
+    ipBytes := make([]byte, 16)
+
+    copy(ipBytes, b[2:])
+
+    return fmt.Sprintf(
+        "%s/%d",
+        net.IP(ipBytes).String(),
+        prefixLen,
+    )
 }

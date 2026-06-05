@@ -25,9 +25,9 @@ type UserSession struct {
 	MultiSessionID   string
 	CallingStationID string
 
-	FramedIPv4 [4]byte
-	PublicIPv4 [4]byte
-	FramedIPv6 [64]byte
+	FramedIPv4 string
+	PublicIPv4 string
+	FramedIPv6 string
 
 	PortStart uint16
 	PortEnd   uint16
@@ -68,20 +68,13 @@ func Insert(s *UserSession) int {
 	Mu.Lock()
 	defer Mu.Unlock()
 
-	Map[s.AccountSessionID] =
-		&SessionNode{
-			Entry: *s,
-		}
+	Map[s.AccountSessionID] = &SessionNode{Entry: *s}
 
 	return 0
 }
 
 func DeleteNode(node *SessionNode) {
-
-	delete(
-		Map,
-		node.Entry.AccountSessionID,
-	)
+	delete(Map, node.Entry.AccountSessionID)
 }
 
 func SetStartTime(s *UserSession) {
@@ -92,11 +85,7 @@ func End(s *UserSession) {
 	s.SessionEnd = time.Now()
 }
 
-func AddExtraAVP(
-	s *UserSession,
-	t byte,
-	v []byte,
-) {
+func AddExtraAVP(s *UserSession, t byte, v []byte) {
 
 	if len(s.ExtraAVPs) >= MaxExtraAVPs {
 		return

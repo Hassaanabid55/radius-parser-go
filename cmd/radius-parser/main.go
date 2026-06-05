@@ -15,33 +15,6 @@ import (
 	"radius-parser/internal/workers"
 )
 
-func printConfig(cfg *config.Config) {
-	fmt.Println("\n================ CONFIG DUMP ================")
-
-	fmt.Println("GENERAL")
-	fmt.Println("  CGNATFilePath    :", cfg.CGNATFilePath)
-	fmt.Println("  WhitelistFilePath:", cfg.WhitelistFilePath)
-	fmt.Println("  InterfaceName    :", cfg.InterfaceName)
-	fmt.Println("  Threads          :", cfg.Threads)
-	fmt.Println("  ExtractAll       :", cfg.ExtractAll)
-	fmt.Println("  Verbosity        :", cfg.Verbosity)
-	fmt.Println("  CapLen           :", cfg.CapLen)
-	fmt.Println("  UpdateTimeout    :", cfg.UpdateTimeout)
-	fmt.Println("  RingBufferSize   :", cfg.RingBufferSize)
-
-	fmt.Println("\nINPUT")
-	fmt.Println("  InputFile        :", cfg.InputFile)
-
-	fmt.Println("\nRABBITMQ")
-	fmt.Println("  Host             :", cfg.RabbitMQHost)
-	fmt.Println("  Port             :", cfg.RabbitMQPort)
-	fmt.Println("  User             :", cfg.RabbitMQUser)
-	fmt.Println("  Password         :", cfg.RabbitMQPassword)
-	fmt.Println("  VHost            :", cfg.RabbitMQVHost)
-	fmt.Println("  Exchange         :", cfg.RabbitMQExchange)
-
-}
-
 func atoi(s string) int {
 	var v int
 	fmt.Sscanf(s, "%d", &v)
@@ -133,22 +106,9 @@ func main() {
 	overrideCLI(cfg)
 
 	// =========================
-	// DEBUG OUTPUT (optional)
-	// =========================
-	if cfg.Verbosity > 0 {
-		fmt.Println("=== CONFIG LOADED ===")
-		fmt.Printf("Interface: %s\n", cfg.InterfaceName)
-		fmt.Printf("Threads: %v\n", cfg.Threads)
-		fmt.Printf("Verbosity: %d\n", cfg.Verbosity)
-		fmt.Printf("InputFile: %s\n", cfg.InputFile)
-	}
-
-	// =========================
 	// RUNTIME OBJECT
 	// =========================
 	rt := &Runtime{Config: cfg}
-
-	printConfig(cfg)
 	start(rt)
 }
 
