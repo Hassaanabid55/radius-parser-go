@@ -6,7 +6,7 @@ The application captures RADIUS Accounting packets from live interfaces or PCAP 
 
 ---
 
-# Features
+## Features
 
 * High-speed packet capture
 
@@ -29,7 +29,7 @@ The application captures RADIUS Accounting packets from live interfaces or PCAP 
 
 ---
 
-# Architecture
+## Architecture
 
 ```text
                    +--------------------+
@@ -66,9 +66,9 @@ The application captures RADIUS Accounting packets from live interfaces or PCAP 
 
 ---
 
-# Session Lifecycle
+## Session Lifecycle
 
-## Start Packet
+### Start Packet
 
 When a RADIUS Accounting Start packet arrives:
 
@@ -85,7 +85,7 @@ session.start
 
 ---
 
-## Update Packet
+### Update Packet
 
 When a RADIUS Accounting Update packet arrives:
 
@@ -97,7 +97,7 @@ No start/stop events are generated.
 
 ---
 
-## Stop Packet
+### Stop Packet
 
 When a RADIUS Accounting Stop packet arrives:
 
@@ -115,7 +115,7 @@ session.stop
 
 ---
 
-## Final Session Export
+### Final Session Export
 
 After all statistics are aggregated:
 
@@ -131,7 +131,7 @@ session.final
 
 ---
 
-# RabbitMQ Topology
+## RabbitMQ Topology
 
 Exchange:
 
@@ -147,9 +147,9 @@ topic
 
 ---
 
-## Published Events
+### Published Events
 
-### Session Start
+#### Session Start
 
 Routing Key:
 
@@ -176,7 +176,7 @@ Payload:
 
 ---
 
-### Session Stop
+#### Session Stop
 
 Routing Key:
 
@@ -194,7 +194,7 @@ Payload:
 
 ---
 
-### Final Session
+#### Final Session
 
 Routing Key:
 
@@ -215,9 +215,9 @@ Payload:
 
 ---
 
-## Consumed Events
+### Consumed Events
 
-### Statistics Updates
+#### Statistics Updates
 
 Routing Key:
 
@@ -239,7 +239,7 @@ Used to update session counters maintained by filtering applications.
 
 ---
 
-### CGNAT Bootstrap
+#### CGNAT Bootstrap
 
 Routing Key:
 
@@ -264,7 +264,7 @@ Used to populate the CGNAT lookup table.
 
 ---
 
-### Whitelist Bootstrap
+#### Whitelist Bootstrap
 
 Routing Key:
 
@@ -287,7 +287,7 @@ Used to populate the whitelist lookup table.
 
 ---
 
-# Configuration
+## Configuration
 
 Example:
 
@@ -314,7 +314,7 @@ verbosity=2
 
 ---
 
-# Session Structure
+## Session Structure
 
 ```go
 type UserSession struct {
@@ -346,7 +346,7 @@ type UserSession struct {
 
 ---
 
-# Building
+## Building
 
 Requirements:
 
@@ -364,7 +364,7 @@ go build -o radius-parser ./cmd/radius-parser
 
 ---
 
-# Running
+## Running
 
 Live Capture
 
@@ -384,7 +384,7 @@ PCAP Replay
 
 ---
 
-# Monitoring
+## Monitoring
 
 The parser maintains runtime statistics:
 
@@ -407,7 +407,7 @@ Statistics are periodically logged by the monitoring thread.
 
 ---
 
-# Performance Goals
+## Performance Goals
 
 * Multi-core packet processing
 * Lock-efficient session lookups
@@ -418,6 +418,6 @@ Statistics are periodically logged by the monitoring thread.
 
 ---
 
-# License
+## License
 
 Internal/Private Project.
