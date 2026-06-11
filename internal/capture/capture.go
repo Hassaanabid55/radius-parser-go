@@ -13,16 +13,9 @@ import (
 type Task struct {
 	Timestamp time.Time
 	Data      []byte
-	SrcIP     string
-	DstIP     string
-	SrcPort   uint16
-	DstPort   uint16
-	IsRadius  bool
 }
 
-// -----------------------------
-// GLOBAL STATE (cleaned)
-// -----------------------------
+// GLOBAL STATE
 var TaskQueue chan Task
 var Inflight atomic.Uint64
 
@@ -31,6 +24,12 @@ var (
 	gRunning  atomic.Bool
 	snapLen   int32
 	verbosity int
+
+	stopCh      = make(chan struct{})
+)
+
+const (
+	RadiusAcct = 1813
 )
 
 func InitCapture(queueSize int, snap int, v int) {
@@ -40,9 +39,7 @@ func InitCapture(queueSize int, snap int, v int) {
 	gRunning.Store(true)
 }
 
-// -----------------------------
-// PACKET PROCESSOR (equivalent to packet_handler)
-// -----------------------------
+// PACKET PROCESSOR
 func processPacket(packet gopacket.Packet) {
 
 	if !gRunning.Load() {
@@ -64,7 +61,6 @@ func processPacket(packet gopacket.Packet) {
 		return
 	}
 
-	ip := ipLayer.(*layers.IPv4)
 	udp := udpLayer.(*layers.UDP)
 
 	if !isRadiusPort(uint16(udp.SrcPort), uint16(udp.DstPort)) {
@@ -74,13 +70,6 @@ func processPacket(packet gopacket.Packet) {
 	task := Task{
 		Timestamp: packet.Metadata().Timestamp,
 		Data:      packet.Data(),
-
-		SrcIP:   ip.SrcIP.String(),
-		DstIP:   ip.DstIP.String(),
-		SrcPort: uint16(udp.SrcPort),
-		DstPort: uint16(udp.DstPort),
-
-		IsRadius: true,
 	}
 
 	select {
@@ -91,9 +80,7 @@ func processPacket(packet gopacket.Packet) {
 	}
 }
 
-// -----------------------------
 // INTERFACE CAPTURE
-// -----------------------------
 func StartInterfaceCapture(iface string) {
 
 	var err error
@@ -102,33 +89,34 @@ func StartInterfaceCapture(iface string) {
 	if err != nil {
 		log.Fatalf("pcap open live failed: %v", err)
 	}
-	defer handle.Close()
 
 	if verbosity > 0 {
 		log.Println("Listening on interface:", iface)
 	}
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	packets := packetSource.Packets()
-
-	for pkt := range packets {
-		if !gRunning.Load() {
-			break
+	for gRunning.Load() {
+		packet, err := packetSource.NextPacket()
+		if err != nil {
+			if !gRunning.Load() {
+				break
+			}
+			continue
 		}
-		processPacket(pkt)
+		processPacket(packet)
+	}
+	if verbosity>1 {
+		log.Printf("Closing Interface Capture.")
 	}
 }
 
-// -----------------------------
 // PCAP FILE CAPTURE
-// -----------------------------
 func StartFileCapture(file string) {
 
 	handle, err := pcap.OpenOffline(file)
 	if err != nil {
 		log.Fatalf("pcap open offline failed: %v", err)
 	}
-	defer handle.Close()
 
 	if verbosity > 0 {
 		log.Println("Processing pcap file:", file)
@@ -136,38 +124,27 @@ func StartFileCapture(file string) {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
-	for pkt := range packetSource.Packets() {
-		if !gRunning.Load() {
-			break
+	for gRunning.Load() {
+		packet, err := packetSource.NextPacket()
+		if err != nil {
+			if !gRunning.Load() {
+				break
+			}
+			continue
 		}
-		processPacket(pkt)
+		processPacket(packet)
 	}
-
-	if verbosity > 0 {
-		log.Println("PCAP file processing complete")
+	if verbosity>1 {
+		log.Printf("Closing File Capture.")
 	}
 }
 
-// -----------------------------
 // STOP CAPTURE
-// -----------------------------
 func Stop() {
 	gRunning.Store(false)
-
-	if handle != nil {
-		handle.Close()
-	}
 }
 
-// -----------------------------
-// RADIUS FILTER (equivalent logic)
-// -----------------------------
+// RADIUS FILTER
 func isRadiusPort(src, dst uint16) bool {
-	const (
-		RadiusAuth = 1812
-		RadiusAcct = 1813
-	)
-
-	return src == RadiusAuth || dst == RadiusAuth ||
-		src == RadiusAcct || dst == RadiusAcct
+	return src == RadiusAcct || dst == RadiusAcct
 }

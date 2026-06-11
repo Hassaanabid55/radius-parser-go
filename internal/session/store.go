@@ -22,18 +22,20 @@ type UserSession struct {
 	IsWhitelist       bool
 
 	AccountSessionID string
-	MultiSessionID   string
 	CallingStationID string
 
-	FramedIPv4 string
-	PublicIPv4 string
-	FramedIPv6 string
+	FramedIPv4    string
+	PublicIPv4    string
+	FramedIPv6    string
+	FramedIPv6Len int
 
 	PortStart uint16
 	PortEnd   uint16
 
 	SessionStart time.Time
 	SessionEnd   time.Time
+
+	byeAcks int
 
 	ExtraAVPs []ExtraAVP
 }
@@ -46,6 +48,8 @@ var (
 	Map = make(map[string]*SessionNode)
 	Mu  sync.RWMutex
 )
+
+var ActiveNode int
 
 func Lock() {
 	Mu.Lock()
@@ -63,14 +67,19 @@ func Find(id string) *SessionNode {
 	return Map[id]
 }
 
-func Insert(s *UserSession) int {
+func Insert(s *UserSession) bool {
 
 	Mu.Lock()
 	defer Mu.Unlock()
 
-	Map[s.AccountSessionID] = &SessionNode{Entry: *s}
+	id := s.AccountSessionID
 
-	return 0
+	if _, exists := Map[id]; exists {
+		return false
+	}
+
+	Map[id] = &SessionNode{Entry: *s}
+	return true
 }
 
 func DeleteNode(node *SessionNode) {
@@ -104,16 +113,25 @@ func AddExtraAVP(s *UserSession, t byte, v []byte) {
 	)
 }
 
-func UpdatePacketCount(sessionID string, delta uint32) {
-	Mu.RLock()
-	node := Map[sessionID]
-	Mu.RUnlock()
+func UpdatePacketCount(sessionID string, delta uint32, byeSeen bool) (bool, UserSession) {
+	Mu.Lock()
+	defer Mu.Unlock()
 
-	if node == nil {
-		return
+	node, ok := Map[sessionID]
+	if !ok || node == nil {
+		return false, UserSession{}
 	}
 
-	Mu.Lock()
+	if byeSeen {
+		node.Entry.byeAcks++
+	}
 	node.Entry.PacketCount += delta
-	Mu.Unlock()
+
+	if node.Entry.byeAcks >= ActiveNode {
+		session := node.Entry
+		DeleteNode(node)
+		return true, session
+	}
+
+	return false, UserSession{}
 }

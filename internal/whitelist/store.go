@@ -15,6 +15,7 @@ import (
 type WhitelistInfo struct {
 	MSISDN string
 	Status bool
+	delete bool
 }
 
 var (
@@ -81,6 +82,10 @@ func Lookup(msisdn string) (WhitelistInfo, bool) {
 	return v, ok
 }
 
+func DeleteNode(node *WhitelistInfo) {
+	delete(whitelistMap, node.MSISDN)
+}
+
 func LoadFromBytes(entries []WhitelistInfo) {
 
 	whitelistMutex.Lock()
@@ -89,6 +94,10 @@ func LoadFromBytes(entries []WhitelistInfo) {
 	for _, e := range entries {
 
 		old, exists := whitelistMap[e.MSISDN]
+		if exists && e.delete {
+			DeleteNode(&e)
+			continue
+		}
 
 		// insert OR update detection
 		if !exists || old != e {

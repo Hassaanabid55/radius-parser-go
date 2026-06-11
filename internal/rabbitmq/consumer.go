@@ -3,10 +3,10 @@ package rabbitmq
 import (
 	"encoding/json"
 	"log"
-
-	amqp "github.com/rabbitmq/amqp091-go"
+	"time"
 
 	"radius-parser/internal/cgnat"
+	"radius-parser/internal/liveness"
 	"radius-parser/internal/session"
 	"radius-parser/internal/whitelist"
 )
@@ -25,38 +25,16 @@ func StartConsumers() error {
 		return err
 	}
 
+	if err := startHeartbeatConsumer(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func startStatsConsumer() error {
-
-	q, err := GlobalClient.ch.QueueDeclare(
-		RouteSessionStats,
-		true,
-		false,
-		false,
-		false,
-		amqp.Table{
-			"x-queue-type": "quorum",
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	err = GlobalClient.ch.QueueBind(
-		q.Name,
-		RouteSessionStats,
-		GlobalClient.cfg.Exchange,
-		false,
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-
 	msgs, err := GlobalClient.ch.Consume(
-		q.Name,
+		RouteSessionStats,
 		"",
 		true,
 		false,
@@ -69,19 +47,21 @@ func startStatsConsumer() error {
 	}
 
 	go func() {
-
 		for d := range msgs {
-
 			var s StatsMessage
 
 			if err := json.Unmarshal(d.Body, &s); err != nil {
 				continue
 			}
 
-			session.UpdatePacketCount(
+			updated, session := session.UpdatePacketCount(
 				s.SessionID,
 				s.PacketCount,
+				s.ByeSeen,
 			)
+			if updated {
+				PublishSessionFinal(session)
+			}
 		}
 	}()
 
@@ -90,33 +70,8 @@ func startStatsConsumer() error {
 
 func startCGNATConsumer() error {
 
-	q, err := GlobalClient.ch.QueueDeclare(
-		RouteCGNATLoad,
-		true,
-		false,
-		false,
-		false,
-		amqp.Table{
-			"x-queue-type": "quorum",
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	err = GlobalClient.ch.QueueBind(
-		q.Name,
-		RouteCGNATLoad,
-		GlobalClient.cfg.Exchange,
-		false,
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-
 	msgs, err := GlobalClient.ch.Consume(
-		q.Name,
+		RouteCGNATLoad,
 		"",
 		true,
 		false,
@@ -154,33 +109,8 @@ func startCGNATConsumer() error {
 
 func startWhitelistConsumer() error {
 
-	q, err := GlobalClient.ch.QueueDeclare(
-		RouteWhitelistLoad,
-		true,
-		false,
-		false,
-		false,
-		amqp.Table{
-			"x-queue-type": "quorum",
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	err = GlobalClient.ch.QueueBind(
-		q.Name,
-		RouteWhitelistLoad,
-		GlobalClient.cfg.Exchange,
-		false,
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-
 	msgs, err := GlobalClient.ch.Consume(
-		q.Name,
+		RouteWhitelistLoad,
 		"",
 		true,
 		false,
@@ -210,6 +140,39 @@ func startWhitelistConsumer() error {
 			}
 			log.Printf("Failed to parse whitelist entries")
 			// try array first
+		}
+	}()
+
+	return nil
+}
+
+func startHeartbeatConsumer() error {
+
+	msgs, err := GlobalClient.ch.Consume(
+		RouteHeartbeat,
+		"",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+
+		for d := range msgs {
+
+			var hb HeartbeatMessage
+			if err := json.Unmarshal(d.Body, &hb); err != nil {
+				continue
+			}
+			
+			liveness.Mu.Lock()
+			liveness.Map[hb.NodeID] = time.Now()
+			liveness.Mu.Unlock()
 		}
 	}()
 

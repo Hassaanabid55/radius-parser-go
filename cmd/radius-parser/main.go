@@ -2,9 +2,10 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"radius-parser/internal/capture"
 	"radius-parser/internal/cgnat"
@@ -15,75 +16,13 @@ import (
 	"radius-parser/internal/workers"
 )
 
-func atoi(s string) int {
-	var v int
-	fmt.Sscanf(s, "%d", &v)
-	return v
-}
-
-func overrideCLI(cfg *config.Config) {
-
-	args := os.Args[1:]
-
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-
-		switch arg {
-
-		case "-v", "--verbose":
-			if i+1 < len(args) {
-				cfg.Verbosity = atoi(args[i+1])
-				i++
-			}
-
-		case "-i", "--interface":
-			if i+1 < len(args) {
-				cfg.InterfaceName = args[i+1]
-				i++
-			}
-
-		case "-t", "--threads":
-			if i+1 < len(args) {
-				cfg.Threads = config.ParseThreads(args[i+1])
-				i++
-			}
-
-		case "--input-file":
-			if i+1 < len(args) {
-				cfg.InputFile = args[i+1]
-				i++
-			}
-
-		case "--caplen":
-			if i+1 < len(args) {
-				cfg.CapLen = atoi(args[i+1])
-				i++
-			}
-
-		case "--update-timeout":
-			if i+1 < len(args) {
-				cfg.UpdateTimeout = atoi(args[i+1])
-				i++
-			}
-
-		case "--ring-buffer-size":
-			if i+1 < len(args) {
-				cfg.RingBufferSize = atoi(args[i+1])
-				i++
-			}
-		}
-	}
-}
-
 type Runtime struct {
 	Config *config.Config
 }
 
 func main() {
 
-	// =========================
-	// STEP 1: FIRST PASS CLI (ONLY config path)
-	// =========================
+	// STEP 1: PASS CLI (ONLY config path)
 	configPath := flag.String("c", "", "config file path")
 	flag.Parse()
 
@@ -91,41 +30,59 @@ func main() {
 		log.Fatal("config file path is required (-c)")
 	}
 
-	// =========================
 	// STEP 2: LOAD CONFIG FILE
-	// =========================
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// =========================
-	// STEP 3: SECOND PASS CLI OVERRIDES
-	// (rebuild flag set manually for full control like C)
-	// =========================
-	overrideCLI(cfg)
+	go waitForShutdown()
 
-	// =========================
 	// RUNTIME OBJECT
-	// =========================
 	rt := &Runtime{Config: cfg}
 	start(rt)
+}
+
+func waitForShutdown() {
+
+	sigCh := make(chan os.Signal, 1)
+
+	signal.Notify(
+		sigCh,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGSEGV,
+	)
+
+	sig := <-sigCh
+
+	log.Printf("Received signal: %v", sig)
+
+	shutdown()
+
+	os.Exit(0)
+}
+
+func shutdown() {
+
+	log.Println("Stopping Radius Parser")
+
+	capture.Stop()
+	workers.Stop()
+	rabbitmq.Close()
+
+	log.Println("Shutdown complete")
 }
 
 func start(rt *Runtime) {
 
 	cfg := rt.Config
 
-	// =========================
 	// 1. INIT CAPTURE
-	// =========================
 	capture.InitCapture(cfg.RingBufferSize, cfg.CapLen, cfg.Verbosity)
-
 	parser.InitParser(cfg.ExtractAll, cfg.UpdateTimeout, cfg.Verbosity)
 
-	// =========================
 	// 2. INIT RABBITMQ
-	// =========================
 	err := rabbitmq.Init(
 		rabbitmq.Config{
 			Host:     cfg.RabbitMQHost,
@@ -144,9 +101,7 @@ func start(rt *Runtime) {
 		log.Fatalf("rabbitmq consumers failed: %v", err)
 	}
 
-	// =========================
 	// 3. LOAD LOCAL FALLBACK DATA
-	// =========================
 	if cfg.CGNATFilePath != "" {
 		if err := cgnat.LoadCGNATFromCSV(cfg.CGNATFilePath); err != nil {
 			log.Fatalf("CGNAT load failed: %v", err)
@@ -159,17 +114,13 @@ func start(rt *Runtime) {
 		}
 	}
 
-	// =========================
 	// 4. START WORKERS
-	// =========================
 	workers.StartWorkers(workers.WorkerConfig{
 		CoreIDs: cfg.Threads,
 		Verbose: cfg.Verbosity,
 	})
 
-	// =========================
 	// 5. START CAPTURE
-	// =========================
 	if cfg.InputFile != "" {
 		capture.StartFileCapture(cfg.InputFile)
 	} else {

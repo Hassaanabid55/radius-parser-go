@@ -2,69 +2,84 @@
 
 High-performance RADIUS Accounting parser written in Go.
 
-The application captures RADIUS Accounting packets from live interfaces or PCAP files, maintains an in-memory session database, performs CGNAT and whitelist lookups, publishes session lifecycle events through RabbitMQ, and consumes external statistics and bootstrap data from other applications.
-
----
+The application captures RADIUS Accounting packets from live interfaces or PCAP files, maintains an in-memory session database, performs CGNAT and whitelist lookups, publishes session lifecycle events through RabbitMQ, consumes bootstrap data from Task Manager, and exchanges statistics with Filtering Applications.
 
 ## Features
 
-* High-speed packet capture
+### Packet Processing
 
-  * Live interface capture
-  * Offline PCAP replay
-* RADIUS Accounting packet parsing
-* Session tracking
+- Live interface capture
+- Offline PCAP replay
+- High-speed packet ingestion
+- Multi-core packet processing
+- RADIUS Accounting packet parsing
 
-  * Start
-  * Update
-  * Stop
-* In-memory session database
-* CGNAT correlation
-* MSISDN whitelist lookup
-* RabbitMQ integration
-* Session timeout handling
-* Multi-core worker processing
-* Statistics monitoring
-* Hot-reload bootstrap data via RabbitMQ
+### Session Management
 
----
+- Session Start handling
+- Session Update handling
+- Session Stop handling
+- Session Finalization
+- Session timeout management
+- In-memory session tracking
+
+### Correlation
+
+- CGNAT correlation
+- MSISDN whitelist lookup
+- IPv4 and IPv6 session support
+
+### RabbitMQ Integration
+
+- Session lifecycle publishing
+- Statistics consumption
+- Bootstrap synchronization
+- Node heartbeat publishing
+
+### Monitoring
+
+- Runtime statistics collection
+- Session monitoring
+- CGNAT cache monitoring
+- Whitelist cache monitoring
 
 ## Architecture
 
 ```text
-                   +--------------------+
-                   | Task Management    |
-                   | Application        |
-                   +---------+----------+
-                             |
-                             |
-                  bootstrap.cgnat
-                  bootstrap.whitelist
-                             |
-                             v
+                     ┌──────────────────────┐
+                     │    Task Manager      │
+                     │                      │
+              ┌──────│ DB Owner             │
+              |      │ RabbitMQ Owner       │
+              |      └──────────┬───────────┘
+              |                 │
+              ▲          bootstrap.cgnat
+              |          bootstrap.whitelist
+       session.final            |
+              |                 │
+              |                 ▼
+┌───────────────────────────────────────────────────┐
+│                    Radius Parser                  │
+│                                                   │
+│ Capture → Parse → Session Engine → RabbitMQ       │
+│                                                   │
+└─────────────┬──────────────────────┬──────────────┘
+              │                      │
+              ▼                      ▲
+      session.start                  |
+      session.stop             node.heartbeat
+              |                session.stats
+              │                      │
+              ▼                      │
+     ┌─────────────────────┐         │
+     │ Filtering Apps      │─────────┘
+     │ (1..N instances)    │
+     └─────────────────────┘
+              │
+              ▼
 
-+----------------------------------------------------+
-|                  Radius Parser                     |
-|                                                    |
-|  Capture -> Parse -> Session Engine -> RabbitMQ    |
-|                                                    |
-+----------------------------------------------------+
-           |                    ^
-           |                    |
-           |                    |
-           v                    |
-   session.start          session.stats
-   session.stop                 |
-   session.final                |
-           |                    |
-           v                    |
-+----------------------+        |
-| Filtering Apps       |--------+
-| (1..N instances)     |
-+----------------------+
+        Task Manager
 ```
-
----
 
 ## Session Lifecycle
 
@@ -83,8 +98,6 @@ Routing Key:
 session.start
 ```
 
----
-
 ### Update Packet
 
 When a RADIUS Accounting Update packet arrives:
@@ -93,9 +106,7 @@ When a RADIUS Accounting Update packet arrives:
 2. Session timeout refreshed.
 3. Session updated in memory.
 
-No start/stop events are generated.
-
----
+No start or stop events are generated.
 
 ### Stop Packet
 
@@ -104,8 +115,8 @@ When a RADIUS Accounting Stop packet arrives:
 1. Session located.
 2. Session end timestamp recorded.
 3. Stop event published.
-4. Session remains temporarily in memory awaiting final statistics.
-5. Filtering applications continue sending packet counters.
+4. Session remains in memory awaiting statistics updates.
+5. Filtering applications continue reporting packet counts.
 
 Routing Key:
 
@@ -113,13 +124,11 @@ Routing Key:
 session.stop
 ```
 
----
-
 ### Final Session Export
 
-After all statistics are aggregated:
+After statistics aggregation completes:
 
-1. Session packet count finalized.
+1. Packet counts finalized.
 2. Final session exported.
 3. Session removed from memory.
 
@@ -129,27 +138,47 @@ Routing Key:
 session.final
 ```
 
----
-
 ## RabbitMQ Topology
 
-Exchange:
+### Exchange
 
 ```text
 radius_exchange
 ```
 
-Type:
+### Exchange Type
 
 ```text
 topic
 ```
 
----
+### Queues
 
-### Published Events
+| Queue               | Producer               | Consumer               |
+|---------------------|------------------------|------------------------|
+| session.start       | Radius Parser          | Filtering Applications |
+| session.stop        | Radius Parser          | Filtering Applications |
+| session.final       | Radius Parser          | Task Manager           |
+| session.stats       | Filtering Applications | Radius Parser          |
+| bootstrap.cgnat     | Task Manager           | Radius Parser          |
+| bootstrap.whitelist | Task Manager           | Radius Parser          |
+| node.heartbeat      | Filtering Applications | Radius Parser          |
 
-#### Session Start
+### Queue Purposes
+
+| Queue               | Purpose                               |
+|---------------------|---------------------------------------|
+| session.start       | New subscriber session                |
+| session.stop        | Session termination notification      |
+| session.final       | Finalized session export              |
+| session.stats       | Packet counters and BYE notifications |
+| bootstrap.cgnat     | CGNAT lookup synchronization          |
+| bootstrap.whitelist | Whitelist synchronization             |
+| node.heartbeat      | Filtering node liveness monitoring    |
+
+## Message Structures
+
+### session.start
 
 Routing Key:
 
@@ -157,26 +186,37 @@ Routing Key:
 session.start
 ```
 
-Payload:
+Structure:
 
-```json
-{
-  "event_timestamp": 1722423063,
-  "is_whitelist": true,
-  "account_session_id": "abc123",
-  "multi_session_id": "xyz456",
-  "calling_station_id": "971501234567",
-  "framed_ipv4": "10.250.41.153",
-  "public_ipv4": "5.38.72.0",
-  "framed_ipv6": "2001:db8::/64",
-  "port_start": 1,
-  "port_end": 6666
+```go
+type StartSessionMessage struct {
+    AccountSessionID string
+    FramedIPv4       string
+    PublicIPv4       string
+    FramedIPv6       string
+    PortStart        uint16
+    PortEnd          uint16
+    IsWhitelist      bool
+    FramedIPv6Len    int
 }
 ```
 
----
+Example:
 
-#### Session Stop
+```json
+{
+  "account_session_id": "abc123",
+  "framed_ipv4": "10.250.41.153",
+  "public_ipv4": "5.38.72.0",
+  "framed_ipv6": "2001:db8::1",
+  "port_start": 1,
+  "port_end": 6666,
+  "is_whitelist": true,
+  "framed_ipv6_len": 64
+}
+```
+
+### session.stop
 
 Routing Key:
 
@@ -184,7 +224,15 @@ Routing Key:
 session.stop
 ```
 
-Payload:
+Structure:
+
+```go
+type StopSessionMessage struct {
+    AccountSessionID string
+}
+```
+
+Example:
 
 ```json
 {
@@ -192,9 +240,7 @@ Payload:
 }
 ```
 
----
-
-#### Final Session
+### session.final
 
 Routing Key:
 
@@ -202,22 +248,44 @@ Routing Key:
 session.final
 ```
 
-Payload:
+Structure:
 
-```json
-{
-  "account_session_id": "abc123",
-  "packet_count": 123456,
-  "session_start": "2026-06-04T12:00:00Z",
-  "session_end": "2026-06-04T14:00:00Z"
+```go
+type ExtraAVP struct {
+    Type  uint8
+    Len   uint8
+    Value []byte
+}
+
+type UserSession struct {
+    EventTimestamp uint32
+    PacketCount    uint32
+    DestroyTime    uint32
+
+    AccountStatusType uint8
+    IsWhitelist       bool
+
+    AccountSessionID string
+    CallingStationID string
+
+    FramedIPv4    string
+    PublicIPv4    string
+    FramedIPv6    string
+    FramedIPv6Len int
+
+    PortStart uint16
+    PortEnd   uint16
+
+    SessionStart time.Time
+    SessionEnd   time.Time
+
+    byeAcks int
+
+    ExtraAVPs []ExtraAVP
 }
 ```
 
----
-
-### Consumed Events
-
-#### Statistics Updates
+### session.stats
 
 Routing Key:
 
@@ -225,98 +293,129 @@ Routing Key:
 session.stats
 ```
 
-Payload:
+Structure:
+
+```go
+type StatsMessage struct {
+    SessionID   string `json:"session_id"`
+    PacketCount uint32 `json:"packet_count"`
+    ByeSeen     bool   `json:"bye_seen"`
+}
+```
+
+Example:
 
 ```json
 {
-  "account_session_id": "abc123",
+  "session_id": "abc123",
   "packet_count": 1500,
   "bye_seen": true
 }
 ```
 
-Used to update session counters maintained by filtering applications.
+Used by Radius Parser to update packet counters and determine when a session can be finalized.
 
----
-
-#### CGNAT Bootstrap
+### bootstrap.cgnat
 
 Routing Key:
 
 ```text
-cgnat.load
+bootstrap.cgnat
 ```
 
-Payload:
+Structure:
 
-```json
-[
-  {
-    "InsideIP":"10.250.41.153",
-    "NatIP":"5.38.72.0",
-    "StartPort":1,
-    "EndPort":6666
-  }
-]
+```go
+type CgnatEntry struct {
+    InsideIP  string
+    NatIP     string
+    StartPort uint16
+    EndPort   uint16
+    delete    bool
+}
 ```
-
-Used to populate the CGNAT lookup table.
-
----
-
-#### Whitelist Bootstrap
-
-Routing Key:
-
-```text
-whitelist.load
-```
-
-Payload:
-
-```json
-[
-  {
-    "MSISDN":"971501234567",
-    "Status":true
-  }
-]
-```
-
-Used to populate the whitelist lookup table.
-
----
-
-## Configuration
 
 Example:
 
-```ini
-interface=ens160
-
-threads=2
-
-ring_buffer_size=4096
-caplen=2048
-
-extract_all=false
-update_timeout=86400
-
-rabbitmq_host=127.0.0.1
-rabbitmq_port=5672
-rabbitmq_user=radius_user
-rabbitmq_password=radius_pass
-rabbitmq_vhost=radius
-rabbitmq_exchange=radius_exchange
-
-verbosity=2
+```json
+{
+  "inside_ip": "10.250.41.153",
+  "nat_ip": "5.38.72.0",
+  "start_port": 1,
+  "end_port": 6666,
+  "delete": false
+}
 ```
 
----
+Used to populate and update the in-memory CGNAT lookup cache.
+
+### bootstrap.whitelist
+
+Routing Key:
+
+```text
+bootstrap.whitelist
+```
+
+Structure:
+
+```go
+type WhitelistInfo struct {
+    MSISDN string
+    Status bool
+    delete bool
+}
+```
+
+Example:
+
+```json
+{
+  "msisdn": "971501234567",
+  "status": true,
+  "delete": false
+}
+```
+
+Used to populate and update the in-memory whitelist cache.
+
+### node.heartbeat
+
+Routing Key:
+
+```text
+node.heartbeat
+```
+
+Structure:
+
+```go
+type HeartbeatMessage struct {
+    NodeID    string    `json:"node_id"`
+    TimeStamp time.Time `json:"time_stamp"`
+}
+```
+
+Example:
+
+```json
+{
+  "node_id": "radius-parser-siteA",
+  "time_stamp": "2026-06-11T12:30:00Z"
+}
+```
+
+Used by MDF applications to advertise liveness and health status to Radius Parser.
 
 ## Session Structure
 
 ```go
+type ExtraAVP struct {
+    Type  uint8
+    Len   uint8
+    Value []byte
+}
+
 type UserSession struct {
     EventTimestamp uint32
 
@@ -327,34 +426,67 @@ type UserSession struct {
     IsWhitelist bool
 
     AccountSessionID string
-    MultiSessionID string
     CallingStationID string
 
-    FramedIPv4 string
-    PublicIPv4 string
-    FramedIPv6 string
+    FramedIPv4    string
+    PublicIPv4    string
+    FramedIPv6    string
+    FramedIPv6Len int
 
     PortStart uint16
-    PortEnd uint16
+    PortEnd   uint16
 
     SessionStart time.Time
-    SessionEnd time.Time
+    SessionEnd   time.Time
 
     ExtraAVPs []ExtraAVP
 }
 ```
 
----
+## Configuration
+
+### Example Configuration
+
+```ini
+# =========================
+# GENERAL SETTINGS
+# =========================
+
+interface_name=dummy0
+threads=2,4,6,8,10,12,14,16,18
+extract_all=no
+verbosity=3
+caplen=3200
+update_timeout=300
+ring_buffer_size=1048576
+
+# =========================
+# INPUT FILES
+# =========================
+
+# input_file=./pcap/RADIUS_input.pcap
+
+# =========================
+# RabbitMQ CONFIG
+# =========================
+
+rabbitmq_host=127.0.0.1
+rabbitmq_port=5672
+rabbitmq_user=radius_user
+rabbitmq_password=radius_pass
+rabbitmq_vhost=radius
+rabbitmq_exchange=radius_exchange
+```
 
 ## Building
 
-Requirements:
+### Requirements
 
-* Go 1.24+
-* RabbitMQ 3.13+
-* Linux
+- Go 1.24+
+- RabbitMQ 3.13+
+- Linux
 
-Build:
+### Build
 
 ```bash
 go mod tidy
@@ -362,29 +494,20 @@ go mod tidy
 go build -o radius-parser ./cmd/radius-parser
 ```
 
----
-
 ## Running
 
-Live Capture
+The application can operate in either:
+
+- Live capture mode
+- Offline PCAP replay mode
+
+Run:
 
 ```bash
-./radius-parser \
-  --interface ens160 \
-  --config radius.conf
+./radius-parser -c <path/to/radius_parser.conf>
 ```
 
-PCAP Replay
-
-```bash
-./radius-parser \
-  --file sample.pcap \
-  --config radius.conf
-```
-
----
-
-## Monitoring
+## Live Monitoring
 
 The parser maintains runtime statistics:
 
@@ -405,19 +528,12 @@ Total Restores
 
 Statistics are periodically logged by the monitoring thread.
 
----
-
 ## Performance Goals
 
-* Multi-core packet processing
-* Lock-efficient session lookups
-* O(1) whitelist lookups
-* O(1) CGNAT lookups
-* RabbitMQ topic-based fanout
-* Suitable for ISP-scale RADIUS accounting environments
-
----
-
-## License
-
-Internal/Private Project.
+- Multi-core packet processing
+- Lock-efficient session lookups
+- O(1) whitelist lookups
+- O(1) CGNAT lookups
+- RabbitMQ topic-based fanout
+- High-throughput session lifecycle processing
+- Suitable for ISP-scale RADIUS accounting environments

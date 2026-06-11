@@ -63,23 +63,18 @@ func sessionTimeoutLoop() {
 					log.Printf("Session expired: %s", id)
 				}
 
-				// mimic C behavior
 				session.End(&node.Entry)
-
-				// IMPORTANT: delete safely under lock
-				delete(session.Map, id)
 
 				rabbitmq.PublishSessionStop(node.Entry)
 
-				// update stats (if you want C parity)
-				if stats.GetSessionCount() > 0 {
-					stats.DecSessionCount()
+				if OptVerbosity.Load() > 2 { // update stats
+					if stats.GetSessionCount() > 0 {
+						stats.DecSessionCount()
+					}
+					stats.IncDeletes()
 				}
-				stats.IncDeletes()
 			}
-
 			shard = (shard + 1) % 10
-
 			session.Mu.Unlock()
 		}
 	}

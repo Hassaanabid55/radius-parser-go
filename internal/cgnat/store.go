@@ -13,10 +13,11 @@ import (
 )
 
 type CgnatEntry struct {
-	InsideIP  string
-	NatIP     string
+	InsideIP  string // Private IP
+	NatIP     string // Public IP
 	StartPort uint16
 	EndPort   uint16
+	delete    bool
 }
 
 var (
@@ -70,7 +71,7 @@ func LoadCGNATFromCSV(path string) error {
 			StartPort: uint16(startPort64),
 			EndPort:   uint16(endPort64),
 		}
-
+		// For debugging
 		stats.IncCGNATEntries()
 	}
 
@@ -94,14 +95,21 @@ func Lookup(ip string) (CgnatEntry, bool) {
 	return v, ok
 }
 
+func DeleteNode(node *CgnatEntry) {
+	delete(cgnatMap, node.InsideIP)
+}
+
 func LoadFromBytes(entries []CgnatEntry) {
 
 	cgnatMutex.Lock()
 	defer cgnatMutex.Unlock()
 
 	for _, e := range entries {
-
 		old, exists := cgnatMap[e.InsideIP]
+		if exists && e.delete {
+			DeleteNode(&e)
+			continue
+		}
 
 		// insert OR update detection
 		if !exists || old != e {

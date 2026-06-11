@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	// "log"
 	"net"
+	// "strconv"
 	"sync/atomic"
 	"time"
 
@@ -15,30 +17,21 @@ import (
 	"radius-parser/internal/whitelist"
 )
 
-/* =========================================================
- * GLOBAL CONFIG (set from main)
- * ========================================================= */
-
+// GLOBAL CONFIG (set from main)
 var (
 	OptExtractAll    atomic.Bool
 	OptUpdateTimeout atomic.Uint32
 	OptVerbosity     atomic.Int32
 )
 
-/* =========================================================
- * INIT FUNCTION (called from main)
- * ========================================================= */
-
+// INIT FUNCTION (called from main)
 func InitParser(extractAll bool, updateTimeout int, verbosity int) {
 	OptExtractAll.Store(extractAll)
 	OptUpdateTimeout.Store(uint32(updateTimeout))
 	OptVerbosity.Store(int32(verbosity))
 }
 
-/* =========================================================
- * SESSION STATUS
- * ========================================================= */
-
+// SESSION STATUS
 const (
 	SessionStart  = 1
 	SessionStop   = 2
@@ -46,23 +39,19 @@ const (
 )
 
 const (
-	AcctStatusType     = 40
-	AcctSessionID      = 44
-	AcctMultiSessionID = 50
-	EventTimestamp     = 55
-	CallingStationID   = 31
-	FramedIPAddress    = 8
-	FramedIPv6Prefix   = 97
+	AcctStatusType   = 40
+	AcctSessionID    = 44
+	EventTimestamp   = 55
+	CallingStationID = 31
+	FramedIPAddress  = 8
+	FramedIPv6Prefix = 97
 )
 
 const (
 	RadiusHeaderLen = 20
 )
 
-/* =========================================================
- * RADIUS PACKET
- * ========================================================= */
-
+// RADIUS PACKET
 type RadiusPacket struct {
 	Code       uint8
 	Identifier uint8
@@ -71,10 +60,7 @@ type RadiusPacket struct {
 	Attributes []byte
 }
 
-/* =========================================================
- * PARSE PACKET (FAST VALIDATION ONLY)
- * ========================================================= */
-
+// PARSE PACKET
 func ParseRadiusPacket(data []byte) (*RadiusPacket, error) {
 
 	if len(data) < 20 {
@@ -140,9 +126,7 @@ func ExtractRadiusFromTask(data []byte) ([]byte, error) {
 	return radius, nil
 }
 
-/* =========================================================
- * SESSION BUILD
- * ========================================================= */
+// SESSION BUILD
 func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 
 	s := &session.UserSession{}
@@ -168,16 +152,18 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 				v := binary.BigEndian.Uint32(value)
 				s.AccountStatusType = uint8(v)
 
-				switch s.AccountStatusType {
+				if OptVerbosity.Load() > 2 {
+					switch s.AccountStatusType {
 
-				case SessionStart:
-					stats.IncStarts()
+					case SessionStart:
+						stats.IncStarts()
 
-				case SessionUpdate:
-					stats.IncTotalUpdates()
+					case SessionUpdate:
+						stats.IncTotalUpdates()
 
-				case SessionStop:
-					stats.IncTotalDeletes()
+					case SessionStop:
+						stats.IncTotalDeletes()
+					}
 				}
 			}
 
@@ -208,19 +194,17 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 			}
 
 		case FramedIPv6Prefix:
-			s.FramedIPv6 = parseIPv6Prefix(value)
+			s.FramedIPv6, s.FramedIPv6Len = parseIPv6Prefix(value)
+		}
 
-		case AcctMultiSessionID:
-			s.MultiSessionID = string(value)
+		if node != nil && (s.AccountStatusType == SessionStop || s.AccountStatusType == SessionUpdate) {
+			break
 		}
 
 		offset += attrLen
 	}
 
-	// ===============================
 	// SESSION LOGIC (POST PARSE FIX)
-	// ===============================
-
 	if node != nil && s.AccountStatusType != 0 {
 
 		switch s.AccountStatusType {
@@ -232,28 +216,27 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 			*s = node.Entry
 			session.Unlock()
 
-			stats.IncUpdates()
+			if OptVerbosity.Load() > 2 {
+				stats.IncUpdates()
+			}
 			return s, nil
 
 		case SessionStop:
 			session.Lock()
 			session.End(&node.Entry)
 			*s = node.Entry
-			session.DeleteNode(node)
 			session.Unlock()
 
 			rabbitmq.PublishSessionStop(s)
-
-			stats.DecSessionCount()
-			stats.IncDeletes()
+			if OptVerbosity.Load() > 2 {
+				stats.DecSessionCount()
+				stats.IncDeletes()
+			}
 			return s, nil
 		}
 	}
 
-	// ===============================
 	// INSERT LOGIC
-	// ===============================
-
 	if s.AccountStatusType == SessionStart || s.AccountStatusType == SessionUpdate {
 
 		session.SetStartTime(s)
@@ -263,7 +246,7 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 
 		rabbitmq.PublishSessionStart(s)
 
-		if rc == 0 {
+		if rc && OptVerbosity.Load() > 2 {
 			stats.IncSessionCount()
 			stats.IncInserts()
 		}
@@ -273,28 +256,22 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 }
 
 func parseIPv4(b []byte) string {
-    if len(b) != 4 {
-        return ""
-    }
+	if len(b) != 4 {
+		return ""
+	}
 
-    return net.IP(b).String()
+	return net.IP(b).String()
 }
 
-func parseIPv6Prefix(b []byte) string {
+func parseIPv6Prefix(b []byte) (string, int) {
 
-    if len(b) < 2 {
-        return ""
-    }
+	if len(b) < 2 {
+		return "", 0
+	}
 
-    prefixLen := b[1]
+	prefixLen := b[1]
+	ipBytes := make([]byte, 16)
+	copy(ipBytes, b[2:])
 
-    ipBytes := make([]byte, 16)
-
-    copy(ipBytes, b[2:])
-
-    return fmt.Sprintf(
-        "%s/%d",
-        net.IP(ipBytes).String(),
-        prefixLen,
-    )
+	return net.IP(ipBytes).String(), int(prefixLen)
 }
