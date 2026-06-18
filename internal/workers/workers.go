@@ -29,7 +29,7 @@ func StartWorkers(cfg WorkerConfig) {
 		wg.Add(1)
 		go worker(core, i, cfg.Verbose)
 	}
-	liveness.StartAliveNodeCounter(20*time.Second)
+	liveness.StartAliveNodeCounter(20 * time.Second)
 	parser.StartSessionTimeoutWorker()
 	if cfg.Verbose > 2 {
 		stats.StartSessionStatsThread()

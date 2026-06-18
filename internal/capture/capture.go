@@ -25,7 +25,7 @@ var (
 	snapLen   int32
 	verbosity int
 
-	stopCh      = make(chan struct{})
+	stopCh = make(chan struct{})
 )
 
 const (
@@ -105,7 +105,7 @@ func StartInterfaceCapture(iface string) {
 		}
 		processPacket(packet)
 	}
-	if verbosity>1 {
+	if verbosity > 1 {
 		log.Printf("Closing Interface Capture.")
 	}
 }
@@ -134,7 +134,7 @@ func StartFileCapture(file string) {
 		}
 		processPacket(packet)
 	}
-	if verbosity>1 {
+	if verbosity > 1 {
 		log.Printf("Closing File Capture.")
 	}
 }

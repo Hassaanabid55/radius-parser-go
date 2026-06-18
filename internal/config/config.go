@@ -29,6 +29,9 @@ type Config struct {
 	RabbitMQPassword string
 	RabbitMQVHost    string
 	RabbitMQExchange string
+
+	SiteName  string
+	NodeName  string
 }
 
 func ParseThreads(s string) []int {
@@ -132,6 +135,10 @@ func (c *Config) apply(key, val string) {
 		c.RabbitMQVHost = val
 	case "rabbitmq_exchange":
 		c.RabbitMQExchange = val
+	case "site_name":
+		c.SiteName = val
+	case "node_name":
+		c.NodeName = val
 	}
 }
 

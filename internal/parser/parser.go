@@ -4,9 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	// "log"
 	"net"
-	// "strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -130,7 +129,7 @@ func ExtractRadiusFromTask(data []byte) ([]byte, error) {
 func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 
 	s := &session.UserSession{}
-	var node *session.SessionNode
+	var node *session.UserSession
 
 	offset := 0
 
@@ -187,7 +186,7 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 			if len(value) == 4 {
 				s.FramedIPv4 = parseIPv4(value)
 				if nat, ok := cgnat.Lookup(s.FramedIPv4); ok {
-					s.PublicIPv4 = nat.NatIP
+					s.PublicIPv4 = nat.PublicIP
 					s.PortStart = nat.StartPort
 					s.PortEnd = nat.EndPort
 				}
@@ -211,9 +210,9 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 
 		case SessionUpdate:
 			session.Lock()
-			session.End(&node.Entry)
-			node.Entry.DestroyTime = uint32(time.Now().Unix()) + OptUpdateTimeout.Load()
-			*s = node.Entry
+			session.End(node)
+			node.DestroyTime = uint32(time.Now().Unix()) + OptUpdateTimeout.Load()
+			*s = *node
 			session.Unlock()
 
 			if OptVerbosity.Load() > 2 {
@@ -223,8 +222,10 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 
 		case SessionStop:
 			session.Lock()
-			session.End(&node.Entry)
-			*s = node.Entry
+			session.End(node)
+			node.StopSent = true
+			node.DestroyTime = uint32(time.Now().Unix()) + OptUpdateTimeout.Load()
+			*s = *node
 			session.Unlock()
 
 			rabbitmq.PublishSessionStop(s)
@@ -244,9 +245,8 @@ func BuildSession(pkt *RadiusPacket) (*session.UserSession, error) {
 
 		rc := session.Insert(s)
 
-		rabbitmq.PublishSessionStart(s)
-
 		if rc && OptVerbosity.Load() > 2 {
+			rabbitmq.PublishSessionStart(s)
 			stats.IncSessionCount()
 			stats.IncInserts()
 		}
@@ -264,14 +264,13 @@ func parseIPv4(b []byte) string {
 }
 
 func parseIPv6Prefix(b []byte) (string, int) {
-
 	if len(b) < 2 {
 		return "", 0
 	}
 
-	prefixLen := b[1]
-	ipBytes := make([]byte, 16)
-	copy(ipBytes, b[2:])
+	prefixLen := int(b[1])
+	ip := net.IP(make([]byte, 16))
+	copy(ip, b[2:])
 
-	return net.IP(ipBytes).String(), int(prefixLen)
+	return ip.String()[:strings.Index(ip.String(), "::")], prefixLen
 }

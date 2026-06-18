@@ -327,8 +327,8 @@ Structure:
 
 ```go
 type CgnatEntry struct {
-    InsideIP  string
-    NatIP     string
+    PrivateIP  string
+    PublicIP     string
     StartPort uint16
     EndPort   uint16
     delete    bool

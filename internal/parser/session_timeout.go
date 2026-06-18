@@ -27,6 +27,7 @@ func StopSessionTimeoutWorker() {
 }
 
 func sessionTimeoutLoop() {
+
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -36,46 +37,59 @@ func sessionTimeoutLoop() {
 			return
 
 		case <-ticker.C:
+
 			now := uint32(time.Now().Unix())
 
+			var toStop []*session.UserSession
+
+			// PHASE 1: LOCK ONLY FOR READ/MUTATION
 			session.Mu.Lock()
 
 			idx := 0
 
-			for id, node := range session.Map {
+			for _, node := range session.Map {
 
-				// shard distribution (matches C: idx++ % 10)
 				if (idx % 10) != int(shard) {
 					idx++
 					continue
 				}
 				idx++
 
-				if node.Entry.DestroyTime == 0 {
+				if node.DestroyTime == 0 || node.DestroyTime > now {
 					continue
 				}
 
-				if node.Entry.DestroyTime > now {
+				// already handled STOP
+				if node.StopSent {
+					rabbitmq.PublishSessionFinal(node)
+					session.DeleteNode(node)
 					continue
 				}
+
+				// mark stop
+				node.StopSent = true
+				node.DestroyTime = uint32(time.Now().Unix()) + OptUpdateTimeout.Load()
+				session.End(node)
+				toStop = append(toStop, node)
+			}
+			shard = (shard + 1) % 10
+			session.Mu.Unlock()
+
+			// PHASE 2: OUTSIDE LOCK (IMPORTANT)
+			for _, node := range toStop {
 
 				if OptVerbosity.Load() > 2 {
-					log.Printf("Session expired: %s", id)
+					log.Printf("Session expired: %s", node.AccountSessionID)
 				}
 
-				session.End(&node.Entry)
-
-				rabbitmq.PublishSessionStop(node.Entry)
-
-				if OptVerbosity.Load() > 2 { // update stats
+				rabbitmq.PublishSessionStop(node)
+				if OptVerbosity.Load() > 2 {
 					if stats.GetSessionCount() > 0 {
 						stats.DecSessionCount()
 					}
 					stats.IncDeletes()
 				}
 			}
-			shard = (shard + 1) % 10
-			session.Mu.Unlock()
 		}
 	}
 }

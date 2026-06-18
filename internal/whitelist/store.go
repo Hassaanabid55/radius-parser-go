@@ -29,7 +29,7 @@ func LoadWhitelistFromFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open whitelist file: %w", err)
 	}
-	
+
 	defer f.Close()
 	tmp := make(map[string]WhitelistInfo)
 	scanner := bufio.NewScanner(f)

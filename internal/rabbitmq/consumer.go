@@ -169,7 +169,7 @@ func startHeartbeatConsumer() error {
 			if err := json.Unmarshal(d.Body, &hb); err != nil {
 				continue
 			}
-			
+
 			liveness.Mu.Lock()
 			liveness.Map[hb.NodeID] = time.Now()
 			liveness.Mu.Unlock()

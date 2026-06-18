@@ -10,7 +10,7 @@ type StatsMessage struct {
 	ByeSeen     bool   `json:"bye_seen"`
 }
 
-type  HeartbeatMessage struct {
+type HeartbeatMessage struct {
 	NodeID    string    `json:"node_id"`
 	TimeStamp time.Time `json:"time_stamp"`
 }

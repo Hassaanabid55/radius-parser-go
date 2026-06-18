@@ -1,6 +1,7 @@
 package session
 
 import (
+	"log"
 	"sync"
 	"time"
 )
@@ -35,17 +36,14 @@ type UserSession struct {
 	SessionStart time.Time
 	SessionEnd   time.Time
 
-	byeAcks int
+	byeAcks  int
+	StopSent bool
 
 	ExtraAVPs []ExtraAVP
 }
 
-type SessionNode struct {
-	Entry UserSession
-}
-
 var (
-	Map = make(map[string]*SessionNode)
+	Map = make(map[string]*UserSession)
 	Mu  sync.RWMutex
 )
 
@@ -59,7 +57,7 @@ func Unlock() {
 	Mu.Unlock()
 }
 
-func Find(id string) *SessionNode {
+func Find(id string) *UserSession {
 
 	Mu.RLock()
 	defer Mu.RUnlock()
@@ -78,12 +76,12 @@ func Insert(s *UserSession) bool {
 		return false
 	}
 
-	Map[id] = &SessionNode{Entry: *s}
+	Map[id] = s
 	return true
 }
 
-func DeleteNode(node *SessionNode) {
-	delete(Map, node.Entry.AccountSessionID)
+func DeleteNode(node *UserSession) {
+	delete(Map, node.AccountSessionID)
 }
 
 func SetStartTime(s *UserSession) {
@@ -123,12 +121,13 @@ func UpdatePacketCount(sessionID string, delta uint32, byeSeen bool) (bool, User
 	}
 
 	if byeSeen {
-		node.Entry.byeAcks++
+		node.byeAcks++
 	}
-	node.Entry.PacketCount += delta
+	node.PacketCount += delta
+	log.Printf("stats Updated: %+v",node)
 
-	if node.Entry.byeAcks >= ActiveNode {
-		session := node.Entry
+	if node.byeAcks >= ActiveNode {
+		session := *node
 		DeleteNode(node)
 		return true, session
 	}
